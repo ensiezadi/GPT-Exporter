@@ -16,7 +16,7 @@
         const script = document.createElement('script');
         script.src = chrome.runtime.getURL('exporter.user.js');
         script.type = 'text/javascript';
-        script.onload = () => script.remove();
+        script.onload = () => { script.remove(); const api = document.createElement('script'); api.src = chrome.runtime.getURL('sync/page-api.js'); api.onload = () => api.remove(); document.documentElement.appendChild(api); };
         document.documentElement.appendChild(script);
     };
     document.documentElement.appendChild(jszipScript);

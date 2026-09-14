@@ -1,46 +1,205 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-    <meta charset="utf-8">
-    <title>ChatGPT Exporter 设置</title>
-    <link rel="stylesheet" href="../styles/options.css">
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>GPT Exporter · 同步中心</title>
+    <link rel="stylesheet" href="../styles/dashboard.css" />
+  </head>
+  <body>
     <main>
-        <h1>导出与提醒设置</h1>
-        <form id="settings-form">
-            <section>
-                <label for="frequency">提醒频率</label>
-                <select id="frequency" name="frequency">
-                    <option value="off">关闭</option>
-                    <option value="daily">每天</option>
-                    <option value="weekly">每周</option>
-                </select>
-            </section>
-            <section id="time-section">
-                <label for="timeOfDay">提醒时间</label>
-                <input type="time" id="timeOfDay" name="timeOfDay" value="09:00">
-            </section>
-            <section id="weekday-section">
-                <label for="weekday">提醒日（周模式）</label>
-                <select id="weekday" name="weekday">
-                    <option value="1">周一</option>
-                    <option value="2">周二</option>
-                    <option value="3">周三</option>
-                    <option value="4">周四</option>
-                    <option value="5">周五</option>
-                    <option value="6">周六</option>
-                    <option value="0">周日</option>
-                </select>
-            </section>
-            <div class="form-actions">
-                <button type="submit">保存设置</button>
-                <button type="button" id="reset-btn" class="ghost">恢复默认</button>
-            </div>
-            <p id="save-state" role="status"></p>
+      <header>
+        <div>
+          <div class="brand">GPT EXPORTER / 2.0</div>
+          <h1>让对话持续归档</h1>
+          <p>扫描新增与更新，保留原始备份，将可见对话同步到 Notion。</p>
+        </div>
+        <span class="badge" id="connection">未连接</span>
+      </header>
+      <div class="stats">
+        <div class="stat">
+          <span>Projects</span><strong id="projects-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>本次扫描 Conversations</span
+          ><strong id="conversations-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>待处理</span><strong id="pending-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>页面缓存条数</span><strong id="cache-count">—</strong>
+        </div>
+      </div>
+      <section class="card">
+        <h2>Sync 状态</h2>
+        <p id="sync-status">尚未扫描</p>
+        <progress
+          id="progress"
+          value="0"
+          max="1"
+          aria-label="同步进度"
+        ></progress>
+        <p id="last-times">上次扫描：— · 上次全部同步成功：—</p>
+        <p id="summary"></p>
+        <div class="actions">
+          <button class="primary" id="scan">扫描新增与更新</button
+          ><button id="resume">开始同步 / 继续 / 重试失败</button
+          ><button id="export">打开页面导出</button>
+        </div>
+        <p id="feedback" role="status" aria-live="polite"></p>
+        <p id="job-error" class="notice error hidden"></p>
+      </section>
+      <section class="card">
+        <h2>Connect Notion</h2>
+        <p>
+          使用 Notion internal integration token。先将下方三个数据库共享给该
+          integration，再填写其 data source ID。连接测试只读取字段结构。
+        </p>
+        <form id="config-form">
+          <div class="grid">
+            <label class="wide"
+              >ChatGPT Workspace ID<input
+                id="workspace"
+                required
+                autocomplete="off"
+              /><small
+                >明确绑定当前登录账户/工作区。请从 ChatGPT 请求的
+                ChatGPT-Account-Id 获取；不要填写猜测的 ID。</small
+              ></label
+            ><label class="wide"
+              >Notion access token<input
+                id="token"
+                type="password"
+                autocomplete="new-password"
+                placeholder="输入新 token；留空保留已保存值"
+              /><small
+                >仅保存在本浏览器扩展的本地存储，不进入网页，不通过 Chrome
+                同步。这里不是 OAuth 登录。</small
+              ></label
+            ><label
+              >ChatGPT Projects · data source ID<input
+                id="source-projects"
+                required /></label
+            ><label
+              >ChatGPT Conversations · data source ID<input
+                id="source-conversations"
+                required /></label
+            ><label
+              >ChatGPT Sync Runs · data source ID<input
+                id="source-runs"
+                required /></label
+            ><label
+              >自动扫描<select id="interval">
+                <option value="0">关闭（默认）</option>
+                <option value="60">每小时</option>
+                <option value="300">每 5 小时</option>
+                <option value="1440">每天</option>
+              </select></label
+            ><label class="wide"
+              ><input type="checkbox" id="auto-sync" />扫描后自动写入
+              Notion（手动及定时扫描均适用）<small
+                >浏览器必须运行，且有已登录的 ChatGPT
+                页面。休眠期间不会准时执行。</small
+              ></label
+            >
+          </div>
+          <details>
+            <summary>字段映射 · 对接既有数据库</summary>
+            <p>
+              三个表及字段必须已存在；不会自动改动数据库结构。字段名可在下面修改。类型要求见
+              README。
+            </p>
+            <textarea
+              id="mapping"
+              aria-label="Notion 字段映射 JSON"
+              spellcheck="false"
+            ></textarea>
+          </details>
+          <div class="actions">
+            <button class="primary" type="submit">保存配置</button
+            ><button type="button" id="test">测试连接与字段</button
+            ><button type="button" id="disconnect">移除 token</button>
+          </div>
         </form>
+      </section>
+      <section class="card">
+        <h2>本地导出提醒</h2>
+        <p>仅发送浏览器通知，与上面的自动增量扫描分开设置。</p>
+        <form id="settings-form">
+          <div class="grid">
+            <label
+              >提醒频率<select id="frequency">
+                <option value="off">关闭</option>
+                <option value="daily">每天</option>
+                <option value="weekly">每周</option>
+              </select></label
+            ><label id="time-section"
+              >提醒时间<input type="time" id="timeOfDay" value="09:00" /></label
+            ><label id="weekday-section"
+              >提醒日<select id="weekday">
+                <option value="1">周一</option>
+                <option value="2">周二</option>
+                <option value="3">周三</option>
+                <option value="4">周四</option>
+                <option value="5">周五</option>
+                <option value="6">周六</option>
+                <option value="0">周日</option>
+              </select></label
+            >
+          </div>
+          <div class="actions">
+            <button type="submit">保存提醒</button
+            ><button type="button" id="reset-btn">关闭提醒并恢复默认</button>
+          </div>
+          <p id="save-state" role="status"></p>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Projects</h2>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>项目名称</th>
+                <th>Project ID</th>
+              </tr>
+            </thead>
+            <tbody id="projects"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Conversations · 同步记录</h2>
+        <input
+          id="search"
+          placeholder="搜索对话标题或 ID"
+          aria-label="搜索对话"
+        />
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>对话</th>
+                <th>项目</th>
+                <th>上次成功同步</th>
+                <th>状态 / 错误</th>
+              </tr>
+            </thead>
+            <tbody id="conversations"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card">
+        <h2>失败详情</h2>
+        <div id="failures"><p>暂无失败记录。</p></div>
+      </section>
+      <p>
+        JSON 保留完整对话树；Markdown 只包含 current_node 可见分支。Notion
+        正文以带版本标记的分段归档保留，历史版本与人工笔记不会被删除。
+      </p>
     </main>
+    <script type="module" src="dashboard.js"></script>
     <script type="module" src="options.js"></script>
-</body>
+  </body>
 </html>
-

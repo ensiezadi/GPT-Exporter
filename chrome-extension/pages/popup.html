@@ -1,26 +1,46 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-    <meta charset="utf-8">
-    <title>ChatGPT Exporter</title>
-    <link rel="stylesheet" href="../styles/popup.css">
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <title>GPT Exporter</title>
+    <link rel="stylesheet" href="../styles/dashboard.css" />
+  </head>
+  <body class="popup">
     <main>
-        <h1>ChatGPT Exporter</h1>
-        <section id="schedule-state">
-            <p id="next-run">计划状态加载中...</p>
-            <p id="reminder-note" class="note"></p>
-        </section>
-        <div class="actions">
-            <button id="open-dialog-btn">导出</button>
+      <header>
+        <div>
+          <div class="brand">GPT EXPORTER</div>
+          <h1>对话归档</h1>
         </div>
-        <p class="hint">请先打开 chatgpt.com，再导出</p>
-        <footer>
-            <button id="open-options-btn" class="link-btn">打开设置</button>
-        </footer>
+        <span class="badge" id="connection">未连接</span>
+      </header>
+      <p>增量备份 · Notion 同步</p>
+      <div class="stats">
+        <div class="stat">
+          <span>Projects</span><strong id="projects-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>Conversations</span><strong id="conversations-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>待处理</span><strong id="pending-count">—</strong>
+        </div>
+        <div class="stat">
+          <span>页面缓存</span><strong id="cache-count">—</strong>
+        </div>
+      </div>
+      <p id="sync-status">尚未扫描</p>
+      <p id="last-times"></p>
+      <p id="job-error" class="notice error hidden"></p>
+      <div class="actions">
+        <button class="primary" id="scan">增量扫描</button
+        ><button id="center">同步中心</button>
+      </div>
+      <div class="actions" style="margin-top: 10px">
+        <button id="export">打开页面导出</button>
+      </div>
+      <p id="feedback" role="status"></p>
     </main>
-    <script type="module" src="popup.js"></script>
-</body>
+    <script type="module" src="dashboard.js"></script>
+  </body>
 </html>
-

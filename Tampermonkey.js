@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ChatGPT Universal Exporter (Markdown Support)
-// @version      1.4.3
+// @version      2.0.0
 // @description  User-centric ZIP exporter for personal/team/project spaces. Supports JSON & Markdown formats. Based on ChatGPT Universal Exporter.
 // @author       huhu
 // @match        https://chatgpt.com/*
@@ -69,7 +69,7 @@
     const CACHE_STORE = 'conversations';
     const CACHE_VERSION_KEY = '__cache_version__';
     const CACHE_VERSION = 1;
-    const EXPORTER_BUILD = '1.4.3-single-project-export';
+    const EXPORTER_BUILD = '2.0.0';
     let accessToken = null;
     let capturedWorkspaceIds = new Set(); // 使用Set存储网络拦截到的ID，确保唯一性
     let exportDiagnostics = [];
@@ -308,6 +308,7 @@
             return value > 1e12 ? Math.floor(value / 1000) : value;
         }
         if (typeof value === 'string') {
+            if (/^\d+(\.\d+)?$/.test(value)) return normalizeEpochSeconds(Number(value));
             const parsed = Date.parse(value);
             if (!Number.isNaN(parsed)) {
                 return Math.floor(parsed / 1000);
@@ -707,9 +708,18 @@
 
         const messages = [];
         const mappingKeys = Object.keys(mapping);
-        const rootId = mapping['client-created-root']
-            ? 'client-created-root'
-            : mappingKeys.find(id => !mapping[id]?.parent) || mappingKeys[0];
+        const branch = [];
+        const ancestors = new Set();
+        let cursor = convData.current_node;
+        if (!cursor || !mapping[cursor]) {
+            throw new Error('缺少有效 current_node；为避免混入其他分支，停止 Markdown 导出。JSON 数据仍保留。');
+        }
+        while (cursor) {
+            if (ancestors.has(cursor) || !mapping[cursor]) throw new Error('对话分支损坏：循环或缺失父节点');
+            ancestors.add(cursor);
+            branch.push(cursor);
+            cursor = mapping[cursor].parent;
+        }
         const visited = new Set();
 
         const traverse = (nodeId) => {
@@ -723,7 +733,7 @@
                 const author = msg.author?.role;
                 const isHidden = msg.metadata?.is_visually_hidden_from_conversation ||
                     msg.metadata?.is_contextual_answers_system_message;
-                if (author && author !== 'system' && !isHidden) {
+                if (['user', 'assistant'].includes(author) && !isHidden) {
                     const content = msg.content;
                     if (content?.content_type === 'text' && Array.isArray(content.parts)) {
                         const rawText = content.parts
@@ -751,16 +761,8 @@
                 }
             }
 
-            if (Array.isArray(node.children)) {
-                node.children.forEach(childId => traverse(childId));
-            }
         };
-
-        if (rootId) {
-            traverse(rootId);
-        } else {
-            mappingKeys.forEach(traverse);
-        }
+        branch.reverse().forEach(traverse);
 
         return messages;
     }
@@ -839,19 +841,38 @@
 
         try {
             const zip = new JSZip();
+            const manifest = { schema_version: 1, exporter_version: EXPORTER_BUILD,
+                workspace_id: resolveWorkspaceId(workspaceId) || null, export_mode: mode,
+                generated_at: new Date().toISOString(), projects: [], conversations: [] };
+            const writeConversation = (data, entry = {}) => {
+                const projectId = entry.projectId || null;
+                const folder = projectId ? `projects/${encodeURIComponent(projectId)}/` : 'conversations/';
+                const id = entry.id || data.conversation_id || data.id;
+                if (!id) throw new Error('缺少 Conversation ID');
+                const jsonPath = `${folder}${encodeURIComponent(id)}.json`;
+                const mdPath = `${folder}${encodeURIComponent(id)}.md`;
+                zip.file(jsonPath, JSON.stringify(data, null, 2));
+                const record = { conversation_id: id, title: entry.title || data.title,
+                    project_id: projectId, project_title: entry.projectTitle || null,
+                    create_time: entry.create_time ?? data.create_time ?? null,
+                    update_time: entry.update_time ?? data.update_time ?? null,
+                    is_archived: entry.is_archived ?? data.is_archived ?? false,
+                    json_path: jsonPath, md_path: null };
+                manifest.conversations.push(record);
+                if (projectId && !manifest.projects.some(p => p.project_id === projectId))
+                    manifest.projects.push({ project_id: projectId, project_title: entry.projectTitle || projectId });
+                zip.file(mdPath, convertConversationToMarkdown(data));
+                record.md_path = mdPath;
+            };
             if (Array.isArray(conversationEntries) && conversationEntries.length > 0) {
                 for (let i = 0; i < conversationEntries.length; i++) {
                     const entry = conversationEntries[i];
                     const label = entry?.title ? entry.title.slice(0, 12) : '对话';
                     btn.textContent = `📥 ${label} (${i + 1}/${conversationEntries.length})`;
                     try {
-                        const convData = await getConversation(entry.id, workspaceId, { useCache });
+                        const convData = await getConversation(entry.id, workspaceId, { useCache, serverUpdateTime: entry.update_time });
                         if (convData?.__cache_hit) stats.hits++; else stats.fetched++;
-                        const target = entry?.projectTitle
-                            ? zip.folder(sanitizeFilename(entry.projectTitle))
-                            : zip;
-                        target.file(generateUniqueFilename(convData), JSON.stringify(convData, null, 2));
-                        target.file(generateMarkdownFilename(convData), convertConversationToMarkdown(convData));
+                        writeConversation(convData, entry);
                     } catch (e) {
                         stats.failed++;
                         failures.push({ id: entry.id, title: entry?.title || '', phase: 'detail', error: e?.message || String(e) });
@@ -869,8 +890,7 @@
                     try {
                         const convData = await getConversation(orphanIds[i], workspaceId, { useCache });
                         if (convData?.__cache_hit) stats.hits++; else stats.fetched++;
-                        zip.file(generateUniqueFilename(convData), JSON.stringify(convData, null, 2));
-                        zip.file(generateMarkdownFilename(convData), convertConversationToMarkdown(convData));
+                        writeConversation(convData, { id: orphanIds[i] });
                     } catch (e) {
                         stats.failed++;
                         failures.push({ id: orphanIds[i], title: '', phase: 'detail', error: e?.message || String(e) });
@@ -894,8 +914,7 @@
                         try {
                             const convData = await getConversation(projectConvIds[i], workspaceId, { useCache });
                             if (convData?.__cache_hit) stats.hits++; else stats.fetched++;
-                            projectFolder.file(generateUniqueFilename(convData), JSON.stringify(convData, null, 2));
-                            projectFolder.file(generateMarkdownFilename(convData), convertConversationToMarkdown(convData));
+                            writeConversation(convData, { id: projectConvIds[i], projectId: project.id, projectTitle: project.title });
                         } catch (e) {
                             stats.failed++;
                             failures.push({ id: projectConvIds[i], title: project.title, phase: 'detail', error: e?.message || String(e) });
@@ -927,6 +946,7 @@
                 zip.file('EXPORT_REPORT.json', JSON.stringify(okReport, null, 2));
             }
 
+            zip.file('EXPORT_MANIFEST.json', JSON.stringify(manifest, null, 2));
             btn.textContent = '📦 生成 ZIP 文件…';
             const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
             const date = new Date().toISOString().slice(0, 10);
@@ -946,7 +966,7 @@
                         : `chatgpt_personal_backup_${date}.zip`;
             }
             downloadFile(blob, filename);
-            const summary = `✅ 导出完成！\n缓存命中: ${stats.hits}\n新拉取: ${stats.fetched}\n失败: ${stats.failed}`;
+            const summary = `${stats.failed ? '⚠️ 导出完成，部分失败' : '✅ 导出完成！'}\n缓存命中: ${stats.hits}\n新拉取: ${stats.fetched}\n失败: ${stats.failed}`;
             if (stats.failed > 0) {
                 alert(`${summary}\n\n失败列表已写入 EXPORT_REPORT.json。`);
             } else {
@@ -1182,7 +1202,7 @@
             id,
             title: firstNonEmpty(raw?.title, raw?.name, item?.title, item?.name, 'Untitled Conversation'),
             create_time: firstNonEmpty(raw?.create_time, raw?.created_at, item?.create_time, item?.created_at, 0),
-            update_time: firstNonEmpty(raw?.update_time, raw?.updated_at, item?.update_time, item?.updated_at, raw?.create_time, item?.create_time, 0),
+            update_time: firstNonEmpty(raw?.update_time, raw?.updated_at, item?.update_time, item?.updated_at, 0),
             is_archived: raw?.is_archived ?? item?.is_archived,
             projectId: firstNonEmpty(
                 raw?.gizmo_id,
@@ -1260,6 +1280,7 @@
 
         const projects = new Map();
         let cursor = null;
+        const seen = new Set();
 
         do {
             const query = new URLSearchParams();
@@ -1286,7 +1307,10 @@
                 }
             });
             cursor = responseCursor(data);
+            if (!cursor && responseHasMore(data, false)) throw new Error('项目列表缺少下一页游标');
             if (cursor) {
+                if (seen.has(cursor)) throw new Error('项目列表游标重复');
+                seen.add(cursor);
                 await sleep(jitter());
             }
         } while (cursor);
@@ -1372,7 +1396,7 @@
         return Array.from(all);
     }
 
-    async function fetchProjectConversationEntries(project, headers) {
+    async function fetchProjectConversationEntries(project, headers, knownRoot = null) {
         const map = new Map();
         const seenPageKeys = new Set();
         const addItems = (items) => {
@@ -1405,7 +1429,7 @@
             const j = pageResult.data;
             const items = responseItems(j);
             const ids = items.map(item => normalizeConversationListItem(item)?.id).filter(Boolean);
-            const pageKey = `gizmo|${cursor || ''}|${ids.join(',')}`;
+            const pageKey = `gizmo|${ids.join(',')}`;
             if (seenPageKeys.has(pageKey)) {
                 recordDiagnostic(`项目 ${project.title || project.id}: gizmo endpoint 重复分页，停止`);
                 break;
@@ -1418,12 +1442,22 @@
             recordDiagnostic(`项目 ${project.title || project.id}: gizmo p${page} (${pageResult.queryLabel}) 返回 ${items.length} 条，新增 ${added} 条，累计 ${map.size} 条`);
 
             const nextCursor = responseCursor(j);
-            if (!nextCursor || nextCursor === cursor) break;
+            if (nextCursor === cursor && nextCursor) throw new Error('项目游标重复');
+            if (!nextCursor && responseHasMore(j, false)) throw new Error('项目声明有下一页但未提供游标');
+            if (!nextCursor) break;
             cursor = nextCursor;
             await sleep(jitter());
         } while (page < 1000);
 
-        const fallbackAdded = await fetchProjectConversationEntriesViaGlobal(project, headers, map);
+        if (page >= 1000) throw new Error('项目分页超过安全上限，扫描未完成');
+        let fallbackAdded = 0;
+        if (Array.isArray(knownRoot)) {
+            for (const entry of knownRoot) if (entry.projectId === project.id) {
+                const before = map.size;
+                upsertConversationEntry(map, entry, {projectId:project.id, projectTitle:project.title});
+                fallbackAdded += map.size - before;
+            }
+        } else fallbackAdded = await fetchProjectConversationEntriesViaGlobal(project, headers, map);
         if (fallbackAdded > 0) {
             recordDiagnostic(`项目 ${project.title || project.id}: global fallback 新增 ${fallbackAdded} 条，累计 ${map.size} 条`);
         }
@@ -1465,71 +1499,34 @@
 
     async function fetchProjectConversationEntriesViaGlobal(project, headers, map) {
         let totalAdded = 0;
-        const filters = [
-            ['gizmo_id', project.id],
-            ['gizmoId', project.id],
-            ['gizmo_ids', project.id]
-        ];
-
-        for (const [filterKey, filterValue] of filters) {
-            let offset = 0;
-            let cursor = null;
-            let hasMore = true;
-            let page = 0;
-            let acceptedAny = false;
-
-            while (hasMore && page < 1000) {
-                const query = new URLSearchParams();
-                query.set('offset', String(offset));
-                query.set('limit', String(PAGE_LIMIT));
-                query.set('order', 'updated');
-                query.set(filterKey, filterValue);
+        // Never trust an undocumented server-side filter; inspect explicit membership on every row.
+        for (const archived of [false, true]) {
+            let offset = 0, cursor = null, more = true;
+            const seen = new Set();
+            while (more) {
+                const query = new URLSearchParams({ offset: String(offset), limit: String(PAGE_LIMIT), order: 'updated' });
+                if (archived) query.set('is_archived', 'true');
                 if (cursor) query.set('cursor', cursor);
-
-                const r = await fetch(`/backend-api/conversations?${query.toString()}`, { headers });
-                if (!r.ok) {
-                    recordDiagnostic(`项目 ${project.title || project.id}: global fallback ${filterKey} 请求失败 ${r.status}`);
-                    break;
+                const response = await fetch(`/backend-api/conversations?${query}`, { headers });
+                if (!response.ok) throw new Error(`项目 fallback 列表失败 (${response.status})`);
+                const data = await response.json(), items = responseItems(data);
+                const fingerprint = JSON.stringify(items.map(item => normalizeConversationListItem(item)?.id));
+                if (items.length && seen.has(fingerprint)) throw new Error('项目 fallback 重复分页');
+                seen.add(fingerprint);
+                for (const item of items) {
+                    const entry = normalizeConversationListItem(item);
+                    if (entry?.projectId !== project.id) continue;
+                    const before = map.size;
+                    upsertConversationEntry(map, item, { projectId: project.id, projectTitle: project.title, is_archived: archived });
+                    totalAdded += map.size - before;
                 }
-
-                const j = await r.json();
-                const items = responseItems(j);
-                if (items.length === 0) break;
-
-                let accepted = 0;
-                items.forEach(item => {
-                    const normalized = normalizeConversationListItem(item);
-                    const marker = normalized?.projectId;
-                    const canTrustServerFilter = !marker && acceptedAny;
-                    if (marker === project.id || canTrustServerFilter) {
-                        const before = map.size;
-                        upsertConversationEntry(map, item, {
-                            projectId: project.id,
-                            projectTitle: project.title
-                        });
-                        if (map.size > before) {
-                            accepted++;
-                            totalAdded++;
-                        }
-                    }
-                });
-
-                if (accepted > 0) acceptedAny = true;
-                recordDiagnostic(`项目 ${project.title || project.id}: global ${filterKey} p${page + 1} 返回 ${items.length} 条，接受 ${accepted} 条`);
-
                 offset += items.length;
-                cursor = responseCursor(j);
-                hasMore = !!cursor || offsetHasMore(j, items, offset);
-                if (!acceptedAny) {
-                    break;
-                }
-                page++;
-                await sleep(jitter());
+                cursor = responseCursor(data);
+                more = !!cursor || offsetHasMore(data, items, offset);
+                if (!items.length && more) throw new Error('项目 fallback 提前返回空页');
+                if (more) await sleep(jitter());
             }
-
-            if (totalAdded > 0) break;
         }
-
         return totalAdded;
     }
 
@@ -1537,7 +1534,7 @@
         const normalized = normalizeConversationListItem(item);
         if (!normalized?.id) return;
         const create_time = normalizeEpochSeconds(normalized.create_time || 0);
-        const update_time = normalizeEpochSeconds(normalized.update_time || normalized.create_time || 0);
+        const update_time = normalizeEpochSeconds(normalized.update_time || 0);
         const entry = {
             id: normalized.id,
             title: normalized.title || 'Untitled Conversation',
@@ -1552,7 +1549,7 @@
             map.set(entry.id, entry);
             return;
         }
-        if (!existing.projectTitle && entry.projectTitle) {
+        if (!existing.projectId && entry.projectId) {
             existing.projectTitle = entry.projectTitle;
             existing.projectId = entry.projectId;
         }
@@ -1568,7 +1565,7 @@
         }
     }
 
-    async function listConversations(workspaceId) {
+    async function listConversations(workspaceId, options = {}) {
         if (!await ensureAccessToken()) {
             throw new Error('无法获取 Access Token，请刷新页面或打开任意一个对话后再试。');
         }
@@ -1591,6 +1588,7 @@
             let offset = 0;
             let has_more = true;
             let cursor = null;
+            const seenPages = new Set();
             do {
                 const query = new URLSearchParams();
                 query.set('offset', String(offset));
@@ -1602,19 +1600,23 @@
                 if (!r.ok) throw new Error(`列举对话列表失败 (${r.status})`);
                 const j = await r.json();
                 const items = responseItems(j);
+                const fingerprint = JSON.stringify(items.map(it => normalizeConversationListItem(it)?.id));
+                if (items.length && seenPages.has(fingerprint)) throw new Error('对话列表重复分页，扫描未完成');
+                seenPages.add(fingerprint);
                 if (items.length > 0) {
                     items.forEach(it => addEntry(it, { is_archived }));
                     offset += items.length;
                     cursor = responseCursor(j);
                     has_more = !!cursor || offsetHasMore(j, items, offset);
                 } else {
+                    if (responseHasMore(j, false) || (responseTotal(j) || 0) > offset) throw new Error('对话列表提前返回空页，扫描未完成');
                     has_more = false;
                 }
                 await sleep(jitter());
             } while (has_more);
         }
 
-        if (workspaceId) {
+        if (workspaceId && !options.skipProjects) {
             const projects = await getProjects(workspaceId);
             for (const project of projects) {
                 const entries = await fetchProjectConversationEntries(project, headers);
@@ -1658,11 +1660,13 @@
     }
 
     async function getConversation(id, workspaceId, opts = {}) {
-        const { useCache = true } = opts;
+        const { useCache = true, serverUpdateTime = null } = opts;
+        const cacheKey = `${resolveWorkspaceId(workspaceId) || 'personal'}:${id}`;
+        const serverTime = normalizeEpochSeconds(serverUpdateTime);
 
         if (useCache) {
-            const cached = await ExportCache.get(id);
-            if (cached) {
+            const cached = await ExportCache.get(cacheKey);
+            if (cached && serverTime > 0 && normalizeEpochSeconds(cached.__server_update_time) >= serverTime) {
                 return { ...cached, __cache_hit: true };
             }
         }
@@ -1696,8 +1700,9 @@
             }
             const j = await r.json();
             j.__fetched_at = new Date().toISOString();
+            j.__server_update_time = serverTime;
             if (useCache) {
-                ExportCache.put(id, j);
+                await ExportCache.put(cacheKey, j);
             }
             return j;
         }
@@ -1785,7 +1790,8 @@
             startDate: '',
             endDate: '',
             useCache: true,
-            cacheSize: 0
+            cacheSize: 0,
+            advancedOpen: false
         };
 
         const refreshCacheSize = async () => {
@@ -1816,23 +1822,33 @@
                         <option value="archived">仅已归档</option>
                     </select>
                 </div>
-                <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
-                    <select id="filter-time-field" style="padding: 8px 28px 8px 8px; border-radius: 6px; border: 1px solid #ccc;">
-                        <option value="update">按更新时间</option>
-                        <option value="create">按创建时间</option>
-                    </select>
-                    <input id="filter-start-date" type="date" style="padding: 8px; border-radius: 6px; border: 1px solid #ccc;">
-                    <span style="color: #666; font-size: 12px;">至</span>
-                    <input id="filter-end-date" type="date" style="padding: 8px; border-radius: 6px; border: 1px solid #ccc;">
-                    <button id="clear-date-btn" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer;">清空日期</button>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                    <button id="advanced-toggle-btn" type="button"
+                        style="padding: 4px 10px; border: 1px solid #d4d4d8; border-radius: 6px; background: #fafafa; color: #52525b; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;">
+                        <span id="advanced-toggle-icon">▸</span><span>高级筛选</span>
+                        <span id="advanced-badge" style="display: none; background: #10a37f; color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 1.4;">已设</span>
+                    </button>
+                    <span id="cache-summary" style="font-size: 12px; color: #6b21a8;"></span>
                 </div>
-                <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center; padding: 8px 10px; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 6px;">
-                    <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #4338ca; cursor: pointer;">
-                        <input id="use-cache-toggle" type="checkbox" checked>
-                        使用缓存（已缓存的对话会跳过 API；中断后可续传）
-                    </label>
-                    <span id="cache-size" style="font-size: 12px; color: #6b21a8;">已缓存: …</span>
-                    <button id="clear-cache-btn" style="margin-left: auto; padding: 4px 10px; border: 1px solid #c4b5fd; border-radius: 6px; background: #fff; color: #6d28d9; cursor: pointer; font-size: 12px;">清空缓存</button>
+                <div id="advanced-section" style="display: none; padding: 10px 12px; margin-bottom: 12px; background: #fafafa; border: 1px solid #e5e7eb; border-radius: 6px;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap;">
+                        <select id="filter-time-field" style="padding: 6px 22px 6px 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 12px;">
+                            <option value="update">按更新时间</option>
+                            <option value="create">按创建时间</option>
+                        </select>
+                        <input id="filter-start-date" type="date" style="padding: 6px; border-radius: 6px; border: 1px solid #ccc; font-size: 12px;">
+                        <span style="color: #666; font-size: 12px;">至</span>
+                        <input id="filter-end-date" type="date" style="padding: 6px; border-radius: 6px; border: 1px solid #ccc; font-size: 12px;">
+                        <button id="clear-date-btn" style="padding: 4px 10px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px;">清空日期</button>
+                    </div>
+                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #4338ca; cursor: pointer;">
+                            <input id="use-cache-toggle" type="checkbox" checked>
+                            使用缓存（已缓存的对话会跳过 API；中断后可续传）
+                        </label>
+                        <span style="font-size: 12px; color: #6b21a8;">已缓存: <span id="cache-size">…</span></span>
+                        <button id="clear-cache-btn" style="padding: 4px 10px; border: 1px solid #c4b5fd; border-radius: 6px; background: #fff; color: #6d28d9; cursor: pointer; font-size: 12px;">清空缓存</button>
+                    </div>
                 </div>
                 <div id="conv-status" style="margin-bottom: 8px; font-size: 12px; color: #666;">正在加载列表...</div>
                 <div id="conv-list" style="max-height: 360px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; background: #fff;"></div>
@@ -1861,10 +1877,36 @@
             const exportBtn = dialog.querySelector('#export-selected-btn');
             const useCacheToggle = dialog.querySelector('#use-cache-toggle');
             const clearCacheBtn = dialog.querySelector('#clear-cache-btn');
+            const advancedToggleBtn = dialog.querySelector('#advanced-toggle-btn');
+            const advancedSection = dialog.querySelector('#advanced-section');
+            const advancedToggleIcon = dialog.querySelector('#advanced-toggle-icon');
+            const advancedBadge = dialog.querySelector('#advanced-badge');
+            const cacheSummary = dialog.querySelector('#cache-summary');
+
+            const updateAdvancedUI = () => {
+                if (advancedSection) advancedSection.style.display = state.advancedOpen ? 'block' : 'none';
+                if (advancedToggleIcon) advancedToggleIcon.textContent = state.advancedOpen ? '▾' : '▸';
+                const hasAdvanced = !!state.startDate || !!state.endDate || state.timeField !== 'update' || !state.useCache;
+                if (advancedBadge) advancedBadge.style.display = hasAdvanced ? 'inline-block' : 'none';
+            };
+            if (advancedToggleBtn) {
+                advancedToggleBtn.onclick = () => {
+                    state.advancedOpen = !state.advancedOpen;
+                    updateAdvancedUI();
+                };
+            }
+            updateAdvancedUI();
+
+            const updateCacheSummary = async () => {
+                const n = await ExportCache.size();
+                state.cacheSize = n;
+                if (cacheSummary) cacheSummary.textContent = n > 0 ? `已缓存 ${n}` : '';
+            };
+            updateCacheSummary();
 
             if (useCacheToggle) {
                 useCacheToggle.checked = state.useCache;
-                useCacheToggle.onchange = (e) => { state.useCache = !!e.target.checked; };
+                useCacheToggle.onchange = (e) => { state.useCache = !!e.target.checked; updateAdvancedUI(); };
             }
             if (clearCacheBtn) {
                 clearCacheBtn.onclick = async () => {
@@ -1872,6 +1914,7 @@
                     clearCacheBtn.disabled = true;
                     await ExportCache.clear();
                     await refreshCacheSize();
+                    await updateCacheSummary();
                     clearCacheBtn.disabled = false;
                 };
             }
@@ -1903,16 +1946,19 @@
                 state.timeField = e.target.value;
                 applyFilters();
                 renderList();
+                updateAdvancedUI();
             };
             startDateInput.onchange = (e) => {
                 state.startDate = e.target.value || '';
                 applyFilters();
                 renderList();
+                updateAdvancedUI();
             };
             endDateInput.onchange = (e) => {
                 state.endDate = e.target.value || '';
                 applyFilters();
                 renderList();
+                updateAdvancedUI();
             };
             clearDateBtn.onclick = () => {
                 state.startDate = '';
@@ -1921,6 +1967,7 @@
                 endDateInput.value = '';
                 applyFilters();
                 renderList();
+                updateAdvancedUI();
             };
             selectAllBtn.onclick = () => {
                 state.filtered.forEach(item => state.selected.add(item.id));
@@ -2344,8 +2391,33 @@
     // --- 脚本启动 ---
     setTimeout(addBtn, 2000);
 
+    async function scanForSync(workspaceId) {
+        if (!workspaceId) throw new Error('请在设置中明确填写当前 ChatGPT Workspace ID，避免跨账户混用');
+        exportDiagnostics = [];
+        const root = await listConversations(workspaceId, { skipProjects: true });
+        const projects = await getProjectSpaces(workspaceId, { conversationsPerGizmo: PROJECT_SIDEBAR_PREVIEW, ownedOnly: false });
+        const map = new Map();
+        root.forEach(e => upsertConversationEntry(map, e));
+        const headers = { Authorization: `Bearer ${accessToken}`, 'oai-device-id': getOaiDeviceId(), 'ChatGPT-Account-Id': workspaceId };
+        for (const project of projects) {
+            const entries = await fetchProjectConversationEntries(project, headers, root);
+            entries.forEach(e => upsertConversationEntry(map, e));
+        }
+        if (exportDiagnostics.some(line => /所有参数形态均失败|重复分页/.test(line)))
+            throw new Error('项目分页不完整，已停止增量扫描；可使用原导出界面检查项目');
+        const titles = new Map(projects.map(p => [p.id,p.title]));
+        for (const entry of map.values()) if (titles.has(entry.projectId)) entry.projectTitle=titles.get(entry.projectId);
+        return { entries: [...map.values()], projects: projects.map(p => ({ id: p.id, title: p.title })), cacheSize: await ExportCache.size() };
+    }
+
     window.ChatGPTExporter = window.ChatGPTExporter || {};
     Object.assign(window.ChatGPTExporter, {
+        scanForSync,
+        detailForSync: async (entry, workspaceId) => {
+            if (!await ensureAccessToken()) throw new Error('登录状态已过期，请重新登录后继续');
+            const data = await getConversation(entry.id, workspaceId, { useCache: true, serverUpdateTime: entry.update_time });
+            return { id: entry.id, markdown: convertConversationToMarkdown(data), cacheHit: !!data.__cache_hit };
+        },
         showDialog: showExportDialog,
         startManualExport: (mode = 'personal', workspaceId = null, useCache = true) => {
             if (mode === 'project') {

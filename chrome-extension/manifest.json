@@ -1,18 +1,20 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Universal Exporter",
-  "description": "Auto-export ChatGPT conversations (personal/team/project) as JSON+Markdown with scheduled reminders.",
-  "version": "1.4.3",
+  "description": "Incremental ChatGPT backup and private Notion sync with resumable jobs.",
+  "version": "2.0.0",
   "permissions": [
     "storage",
     "alarms",
     "notifications",
     "tabs",
-    "scripting"
+    "scripting",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://chat.openai.com/*"
+    "https://chat.openai.com/*",
+    "https://api.notion.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -33,29 +35,28 @@
     {
       "matches": [
         "https://chatgpt.com/*",
-        "https://*.chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://*.openai.com/*"
+        "https://chat.openai.com/*"
       ],
       "js": [
-        "content/inject-exporter.js",
-        "content/auto-export.js"
+        "jszip.min.js",
+        "exporter.user.js",
+        "sync/page-api.js"
       ],
+      "world": "MAIN",
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "content/auto-export.js",
+        "content/sync-bridge.js"
+      ],
+      "world": "ISOLATED",
       "run_at": "document_end"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "exporter.user.js",
-        "jszip.min.js"
-      ],
-      "matches": [
-        "https://chatgpt.com/*",
-        "https://*.chatgpt.com/*",
-        "https://chat.openai.com/*",
-        "https://*.openai.com/*"
-      ]
-    }
-  ]
+  "minimum_chrome_version": "114"
 }

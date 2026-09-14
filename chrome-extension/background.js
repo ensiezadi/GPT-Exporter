@@ -1,3 +1,4 @@
+import './sync/worker.js';
 import { ALARM_NAME, DEFAULT_SETTINGS, normalizeSettings, calculateNextTrigger } from './utils/schedule.js';
 import { storage } from './utils/chrome-helpers.js';
 
