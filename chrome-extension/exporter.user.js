@@ -1751,7 +1751,7 @@
 
         const renderBase = () => {
             const modeLabel = mode === 'team' ? '团队空间' : mode === 'project' ? '项目空间' : '个人空间';
-            const workspaceLabel = workspaceId ? `（${workspaceId}）` : '';
+            const workspaceLabel = workspaceId ? `（${escapeHtml(workspaceId)}）` : '';
             dialog.innerHTML = `
                 <h2 style="margin-top:0; margin-bottom: 12px; font-size: 18px;">选择要导出的对话</h2>
                 <div style="margin-bottom: 12px; color: #666; font-size: 12px;">空间：${modeLabel}${workspaceLabel}</div>
@@ -2192,15 +2192,15 @@
                                      <div id="workspace-id-list">`;
                         detectedIds.forEach((id, index) => {
                             html += `<label style="display: block; margin-bottom: 8px; padding: 8px; border-radius: 6px; cursor: pointer; border: 1px solid #ddd; background: #fff;">
-                                         <input type="radio" name="workspace_id" value="${id}" ${index === 0 ? 'checked' : ''}>
-                                         <code style="margin-left: 8px; font-family: monospace; color: #555;">${id}</code>
+                                         <input type="radio" name="workspace_id" value="${escapeHtml(id)}" ${index === 0 ? 'checked' : ''}>
+                                         <code style="margin-left: 8px; font-family: monospace; color: #555;">${escapeHtml(id)}</code>
                                       </label>`;
                         });
                         html += `</div></div>`;
                     } else if (detectedIds.length === 1) {
                         html += `<div style="background: #f0fdf4; border: 1px solid #4ade80; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
                                      <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534;">✅ 已自动检测到 Workspace ID:</p>
-                                     <code id="workspace-id-code" style="background: #e0e7ff; padding: 4px 8px; border-radius: 4px; font-family: monospace; color: #4338ca; word-break: break-all;">${detectedIds[0]}</code>
+                                     <code id="workspace-id-code" style="background: #e0e7ff; padding: 4px 8px; border-radius: 4px; font-family: monospace; color: #4338ca; word-break: break-all;">${escapeHtml(detectedIds[0])}</code>
                                    </div>`;
                     } else {
                         html += `<div style="background: #fffbeb; border: 1px solid #facc15; border-radius: 8px; padding: 12px; margin-bottom: 20px;">
@@ -2246,7 +2246,7 @@
                                         <strong style="font-size: 16px;">项目空间</strong>
                                         <p style="margin: 4px 0 12px 0; color: #666;">导出项目空间下的对话，将按项目自动分组。</p>
                                         <div style="display: flex; gap: 8px;">
-                                            <button id="select-current-project-btn" style="padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; font-weight: bold;">导出当前项目${currentProject?.title && currentProject.title !== currentProject.id ? ` (${currentProject.title})` : ''}</button>
+                                            <button id="select-current-project-btn" style="padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; font-weight: bold;">导出当前项目${currentProject?.title && currentProject.title !== currentProject.id ? ` (${escapeHtml(currentProject.title)})` : ''}</button>
                                             <button id="select-project-btn" style="padding: 8px 12px; border: none; border-radius: 6px; background: #10a37f; color: #fff; cursor: pointer; font-weight: bold;">导出全部</button>
                                             <button id="select-project-picker-btn" style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer;">选择对话导出</button>
                                         </div>

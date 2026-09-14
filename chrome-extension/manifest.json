@@ -31,6 +31,9 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://api.notion.com https://chatgpt.com https://chat.openai.com; object-src 'self'; base-uri 'self'; frame-ancestors 'none'"
+  },
   "content_scripts": [
     {
       "matches": [
